@@ -10,6 +10,6 @@ When the server is started open a VNC Client and point it to your localhost at p
 
 As the simulation run the board will be updated as each iteration is processed and the graph on the right will be update to show the current population size.
 
-
+Please note the program also makes use of [golang.org/x/image/font](https://godoc.org/golang.org/x/image/font) to draw text in the frame buffer so please install it into your GOPATH.
 
 
