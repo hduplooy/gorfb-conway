@@ -252,7 +252,9 @@ func (gol *GOL) ProcessSetEncoding(conn *gorfb.RFBConn, encodings []int) {
 }
 
 func (gol *GOL) ProcessUpdateRequest(conn *gorfb.RFBConn, x, y, width, height int, incremental bool) {
-	gol.sendRectangle(x, y, width, height)
+	if !incremental {
+		gol.sendRectangle(x, y, width, height)
+	}
 }
 
 func (gol *GOL) ProcessKeyEvent(conn *gorfb.RFBConn, key int, downflag bool) {
