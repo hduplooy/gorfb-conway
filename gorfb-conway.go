@@ -148,8 +148,17 @@ func (gol *GOL) Update() {
 		}
 	}
 	for i := 0; i <= 700; i += 7 {
-		gol.DrawHLine(10, 710, i, black)
-		gol.DrawVLine(i, 10, 710, black)
+		gol.DrawHLine(10, 710, i+10, black)
+		gol.DrawVLine(i+10, 10, 710, black)
+	}
+}
+
+func (gol *GOL) UpdateCell(i, j int) {
+	if gol.board[i][j] == 1 {
+		gol.FillRect(10+i*7, 10+j*7, 17+i*7, 17+j*7, black)
+	} else {
+		gol.FillRect(10+i*7, 10+j*7, 17+i*7, 17+j*7, white)
+		gol.DrawRect(10+i*7, 10+j*7, 17+i*7, 17+j*7, black)
 	}
 }
 
@@ -189,26 +198,30 @@ func (gol *GOL) Run() {
 	for {
 		<-time.After(time.Nanosecond * 300000000) // .3 Seconds for every step
 		// Make a copy of the board to work with the previous instance separate from the new one
-		for i := 0; i < 100; i++ {
-			copy(oldboard[i], gol.board[i])
-		}
-		for i := 0; i < 100; i++ {
-			for j := 0; j < 100; j++ {
-				cnt := checkCnt(oldboard, i, j)
-				if oldboard[i][j] == 0 {
-					if cnt == 3 {
-						gol.board[i][j] = 1
+		if gol.running {
+			for i := 0; i < 100; i++ {
+				copy(oldboard[i], gol.board[i])
+			}
+			for i := 0; i < 100; i++ {
+				for j := 0; j < 100; j++ {
+					cnt := checkCnt(oldboard, i, j)
+					if oldboard[i][j] == 0 {
+						if cnt == 3 {
+							gol.board[i][j] = 1
+						}
+					} else {
+						if cnt < 2 || cnt > 3 {
+							gol.board[i][j] = 0
+						}
 					}
-				} else {
-					if cnt < 2 || cnt > 3 {
-						gol.board[i][j] = 0
+					if gol.board[i][j] != oldboard[i][j] {
+						gol.UpdateCell(i, j)
 					}
 				}
 			}
-		}
-		gol.Update()
-		if gol.sendRectangle(10, 10, 710, 710) != nil {
-			break
+			if gol.sendRectangle(10, 10, 710, 710) != nil {
+				break
+			}
 		}
 	}
 
@@ -221,7 +234,7 @@ func (gol *GOL) Init(conn *gorfb.RFBConn) {
 	for i := 0; i < 100; i++ {
 		gol.board[i] = make([]byte, 100)
 		for j := 0; j < 100; j++ {
-			if rand.Intn(100) < 70 {
+			if rand.Intn(100) < 45 {
 				gol.board[i][j] = 1
 			}
 		}
@@ -239,15 +252,29 @@ func (gol *GOL) ProcessSetEncoding(conn *gorfb.RFBConn, encodings []int) {
 }
 
 func (gol *GOL) ProcessUpdateRequest(conn *gorfb.RFBConn, x, y, width, height int, incremental bool) {
-	gol.sendRectangle(0, 0, 1366, 768)
+	gol.sendRectangle(x, y, width, height)
 }
 
 func (gol *GOL) ProcessKeyEvent(conn *gorfb.RFBConn, key int, downflag bool) {
-	// Ignored for now
+	if key == 'p' && downflag {
+		gol.running = !gol.running
+	}
 }
 
 func (gol *GOL) ProcessPointerEvent(conn *gorfb.RFBConn, x, y, button int) {
-	// Ignored for now
+	if button >= 1 && x >= 10 && x < 710 && y >= 10 && y < 710 {
+		i := (x - 10) / 7
+		j := (y - 10) / 7
+		if button == 1 {
+			gol.board[i][j] = 1
+		} else {
+			gol.board[i][j] = 0
+		}
+		gol.UpdateCell(i, j)
+		if !gol.running {
+			gol.sendRectangle(10+i*7, 10+j*7, 14, 14)
+		}
+	}
 }
 
 func (gol *GOL) ProcessCutText(conn *gorfb.RFBConn, text string) {
