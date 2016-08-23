@@ -25,6 +25,8 @@ type GOL struct { // Game Of Life data
 	running bool
 	// The connection
 	RFBConn *gorfb.RFBConn
+	// Previous nano second the simulation have run a simulation step, just to make sure it is not going to fast when the client and network is very fast
+	Prevstep int64
 }
 
 // Some basic colors that we use
@@ -296,57 +298,44 @@ func (gol *GOL) Run() {
 	for i := 0; i < 100; i++ {
 		oldboard[i] = make([]byte, 100)
 	}
-	for {
-
-		<-time.After(time.Nanosecond * 300000000) // .3 Seconds for every step
-		popcnt := 0
-		if gol.running {
-			// Make a copy of the board to work with the previous instance separate from the new one
-			for i := 0; i < 100; i++ {
-				copy(oldboard[i], gol.board[i])
-			}
-			// Process board acording to rules
-			for i := 0; i < 100; i++ {
-				for j := 0; j < 100; j++ {
-					cnt := checkCnt(oldboard, i, j) // Determine how many neighbours
-					if oldboard[i][j] == 0 {        // If cell is currently de-activates
-						if cnt == 3 { // If de-activated and 3 neighbours then activate
-							gol.board[i][j] = 1
-						}
-					} else {
-						if cnt < 2 || cnt > 3 { // if activated and either less than 3 neighbours or more than 3 then de-activate
-							gol.board[i][j] = 0
-						}
-					}
-					if gol.board[i][j] != oldboard[i][j] {
-						// Update the individual cell if it has changed state
-						gol.UpdateCell(i, j)
-					}
-					// update population count for this iteration
-					popcnt += int(gol.board[i][j])
-				}
-			}
-			popcnt = (popcnt * 100) / 1667 // Adjust count to fit within 600 pixels
-			if len(gol.tots) == 600 {
-				// If gol.tots already have 600 entries
-				// Just slide everything down one and put new one at the end
-				copy(gol.tots, gol.tots[1:])
-				gol.tots[599] = popcnt
-			} else {
-				// Else just append to the end
-				gol.tots = append(gol.tots, popcnt)
-			}
-			// Send the updated board to the client
-			if gol.sendRectangle(10, 10, 701, 701) != nil {
-				break
-			}
-			gol.UpdateGraph()
-			// Send the updated graph to the client
-			if gol.sendRectangle(745, 210, 601, 501) != nil {
-				break
-			}
-
+	popcnt := 0
+	if gol.running {
+		// Make a copy of the board to work with the previous instance separate from the new one
+		for i := 0; i < 100; i++ {
+			copy(oldboard[i], gol.board[i])
 		}
+		// Process board acording to rules
+		for i := 0; i < 100; i++ {
+			for j := 0; j < 100; j++ {
+				cnt := checkCnt(oldboard, i, j) // Determine how many neighbours
+				if oldboard[i][j] == 0 {        // If cell is currently de-activates
+					if cnt == 3 { // If de-activated and 3 neighbours then activate
+						gol.board[i][j] = 1
+					}
+				} else {
+					if cnt < 2 || cnt > 3 { // if activated and either less than 3 neighbours or more than 3 then de-activate
+						gol.board[i][j] = 0
+					}
+				}
+				if gol.board[i][j] != oldboard[i][j] {
+					// Update the individual cell if it has changed state
+					gol.UpdateCell(i, j)
+				}
+				// update population count for this iteration
+				popcnt += int(gol.board[i][j])
+			}
+		}
+		popcnt = (popcnt * 100) / 1667 // Adjust count to fit within 600 pixels
+		if len(gol.tots) == 600 {
+			// If gol.tots already have 600 entries
+			// Just slide everything down one and put new one at the end
+			copy(gol.tots, gol.tots[1:])
+			gol.tots[599] = popcnt
+		} else {
+			// Else just append to the end
+			gol.tots = append(gol.tots, popcnt)
+		}
+
 	}
 }
 
@@ -354,8 +343,8 @@ func (gol *GOL) Run() {
 // A RGBA image is created where the view is build
 // A board is initialized randomly
 // The updated view is send to the client
-// Then start the main routine as a go routine
 func (gol *GOL) Init(conn *gorfb.RFBConn) {
+	fmt.Printf("Connection from %s\n", conn.Conn.RemoteAddr().String())
 	gol.RFBConn = conn
 	gol.Img = image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{1366, 768}})
 	gol.board = make([][]byte, 100)
@@ -368,8 +357,8 @@ func (gol *GOL) Init(conn *gorfb.RFBConn) {
 			}
 		}
 	}
+	gol.Prevstep = time.Now().UnixNano()
 	gol.Update()
-	go gol.Run()
 }
 
 // ProcessSetPixelFormat as requested by client
@@ -386,8 +375,15 @@ func (gol *GOL) ProcessSetEncoding(conn *gorfb.RFBConn, encodings []int) {
 
 // ProcessUpdateRequest as requested by client
 // Only if it is not an incremental request do we honor it
+// First run the next iteration of the simulation
 func (gol *GOL) ProcessUpdateRequest(conn *gorfb.RFBConn, x, y, width, height int, incremental bool) {
-	if !incremental { // Only send an update if it is not incremental
+	if gol.running {
+		now := time.Now().UnixNano()
+		if now-gol.Prevstep > 500000000 { // Make sure we are not going faster than 0.5 secs per step
+			gol.Run()
+			gol.Prevstep = now
+		}
+	} else {
 		gol.sendRectangle(x, y, width, height)
 	}
 }
