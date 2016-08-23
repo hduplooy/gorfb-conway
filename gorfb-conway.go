@@ -415,11 +415,6 @@ func (gol *GOL) ProcessPointerEvent(conn *gorfb.RFBConn, x, y, button int) {
 		}
 		// Update the individual cell
 		gol.UpdateCell(i, j)
-		if !gol.running {
-			// If the simulation is not running at the moment send the update to the client
-			// else it will automatically be shown when the simulation update
-			gol.sendRectangle(10+i*7, 10+j*7, 14, 14)
-		}
 	}
 }
 
