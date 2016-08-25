@@ -27,6 +27,15 @@ type GOL struct { // Game Of Life data
 	RFBConn *gorfb.RFBConn
 	// Previous nano second the simulation have run a simulation step, just to make sure it is not going to fast when the client and network is very fast
 	Prevstep int64
+
+	// Flags to indicated which part of the framebuffer changed
+	// so we need only send them with an incremental update
+	UpdateBoardFlag       bool
+	UpdateGraphFlag       bool
+	UpdateBoilerPlateFlag bool
+	// When a request was send for update and there is no update yet then
+	// remember it so that when an update comes through we can send it immediately
+	UpdateRequested bool
 }
 
 // Some basic colors that we use
@@ -36,9 +45,9 @@ var white = color.RGBA{255, 255, 255, 0}
 var green = color.RGBA{128, 255, 128, 0}
 
 // sendRectangle will take a rectangle of data from the image buffer and tell gorfb to send it to the client
-func (gol *GOL) sendRectangle(x, y, width, height int) error {
+func (gol *GOL) getSendRectangle(x, y, width, height int) gorfb.RFBRectangle {
 	if x == 0 && y == 0 && width == 1366 && height == 768 { // if full screen then send whole buffer
-		return gol.RFBConn.SendRectangle(0, 0, 1366, 768, gol.Img.Pix)
+		return gorfb.RFBRectangle{X: 0, Y: 0, Width: 1366, Height: 768, Buffer: gol.Img.Pix}
 	}
 	// Total number of bytes to send
 	sz := width * height * 4
@@ -59,8 +68,7 @@ func (gol *GOL) sendRectangle(x, y, width, height int) error {
 			copy(buf[st2:], gol.Img.Pix[st1:st1+w4])
 		}
 	}
-	// Tell gorfb to send it
-	return gol.RFBConn.SendRectangle(x, y, width, height, buf)
+	return gorfb.RFBRectangle{X: x, Y: y, Width: width, Height: height, Buffer: buf}
 }
 
 // DrawHLine will draw a horizontal line into a RGBA image buffer (of pixel depth 32)
@@ -221,16 +229,31 @@ func (gol *GOL) UpdateGraph() {
 			gol.DrawHLine(745, 750, 710-i, black)
 		}
 	}
+	// Set flag to indicate that the graph area has changed
+	gol.UpdateGraphFlag = true
+	// If there was an unfulfilled update request then handle it now
+	if gol.UpdateRequested {
+		gol.sendUpdates()
+	}
+}
+
+// UpdateBoilerPlate just prints the stuff that stays always the same
+func (gol *GOL) UpdateBoilerPlate() {
+	gol.DrawText(745, 27, "Conway's Game of Life")
+	gol.DrawHLine(745, 900, 29, black)
+	gol.DrawText(745, 50, "Press \"p\" key to start or pause the simulation.")
+	gol.DrawText(745, 70, "Left click on cells to activate and right click to de-activate.")
+	gol.UpdateBoilerPlateFlag = true
+	if gol.UpdateRequested {
+		gol.sendUpdates()
+	}
 }
 
 // Update the simulation board
 func (gol *GOL) Update() {
 	// Display individual cells of board in place
 	gol.FillRect(0, 0, 1366, 768, white)
-	gol.DrawText(745, 27, "Conway's Game of Life")
-	gol.DrawHLine(745, 900, 29, black)
-	gol.DrawText(745, 50, "Press \"p\" key to start or pause the simulation.")
-	gol.DrawText(745, 70, "Left click on cells to activate and right click to de-activate.")
+	gol.UpdateBoilerPlate()
 
 	// Draw the individual cells that are active
 	for i := 0; i < 100; i++ {
@@ -245,7 +268,14 @@ func (gol *GOL) Update() {
 		gol.DrawHLine(10, 710, i+10, black)
 		gol.DrawVLine(i+10, 10, 710, black)
 	}
+	// Set flag to indicate the board has changed
+	gol.UpdateBoardFlag = true
+	// Update the graph
 	gol.UpdateGraph()
+	// If unfulfilled update request, then do it now
+	if gol.UpdateRequested {
+		gol.sendUpdates()
+	}
 }
 
 // Update a single cell
@@ -255,6 +285,10 @@ func (gol *GOL) UpdateCell(i, j int) {
 	} else {
 		gol.FillRect(10+i*7, 10+j*7, 17+i*7, 17+j*7, white)
 		gol.DrawRect(10+i*7, 10+j*7, 17+i*7, 17+j*7, black)
+	}
+	gol.UpdateBoardFlag = true
+	if gol.UpdateRequested {
+		gol.sendUpdates()
 	}
 }
 
@@ -335,8 +369,8 @@ func (gol *GOL) Run() {
 			// Else just append to the end
 			gol.tots = append(gol.tots, popcnt)
 		}
-
 	}
+	gol.UpdateGraph()
 }
 
 // Init init function as called be gofrb when a RFB connection is made
@@ -349,6 +383,7 @@ func (gol *GOL) Init(conn *gorfb.RFBConn) {
 	gol.Img = image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{1366, 768}})
 	gol.board = make([][]byte, 100)
 	gol.tots = make([]int, 0, 600)
+
 	for i := 0; i < 100; i++ {
 		gol.board[i] = make([]byte, 100)
 		for j := 0; j < 100; j++ {
@@ -357,14 +392,15 @@ func (gol *GOL) Init(conn *gorfb.RFBConn) {
 			}
 		}
 	}
+	fmt.Printf("Board created\n")
 	gol.Prevstep = time.Now().UnixNano()
 	gol.Update()
+	fmt.Printf("Board sent to framebuffer\n")
 }
 
 // ProcessSetPixelFormat as requested by client
 // We ignore it and only print it out
 func (gol *GOL) ProcessSetPixelFormat(conn *gorfb.RFBConn, pf gorfb.PixelFormat) {
-	fmt.Printf("PixelFormat request=%t\n", pf)
 }
 
 // ProcessSetEncoding as requested by client
@@ -373,18 +409,54 @@ func (gol *GOL) ProcessSetEncoding(conn *gorfb.RFBConn, encodings []int) {
 	// Ignored for now
 }
 
+// sendUpdates will check if there is any areas that was changed and then
+// send them to the client
+func (gol *GOL) sendUpdates() {
+	if gol.UpdateBoardFlag || gol.UpdateGraphFlag || gol.UpdateBoilerPlateFlag {
+		rects := make([]gorfb.RFBRectangle, 0, 3)
+		cnt := 0
+		if gol.UpdateBoardFlag {
+			rects = append(rects, gol.getSendRectangle(10, 10, 700, 700))
+			gol.UpdateBoardFlag = false
+			cnt++
+		}
+		if gol.UpdateGraphFlag {
+			rects = append(rects, gol.getSendRectangle(745, 90, 600, 620))
+			gol.UpdateGraphFlag = false
+			cnt++
+		}
+		if gol.UpdateBoardFlag {
+			rects = append(rects, gol.getSendRectangle(745, 10, 700, 80))
+			gol.UpdateBoilerPlateFlag = false
+			cnt++
+		}
+		gol.RFBConn.SendRectangles(rects[:cnt])
+		gol.UpdateRequested = false
+	} else {
+		gol.UpdateRequested = true
+	}
+}
+
 // ProcessUpdateRequest as requested by client
 // Only if it is not an incremental request do we honor it
 // First run the next iteration of the simulation
 func (gol *GOL) ProcessUpdateRequest(conn *gorfb.RFBConn, x, y, width, height int, incremental bool) {
 	if gol.running {
 		now := time.Now().UnixNano()
-		if now-gol.Prevstep > 500000000 { // Make sure we are not going faster than 0.5 secs per step
+		if now-gol.Prevstep > 1000000000 { // Make sure we are not going faster than 0.5 secs per step
 			gol.Run()
 			gol.Prevstep = now
+			fmt.Printf(">>")
 		}
+	}
+	if height == 0 {
+		height = 1
+	}
+	if width == 1366 && height == 768 {
+		gol.RFBConn.SendRectangles([]gorfb.RFBRectangle{gol.getSendRectangle(0, 0, 1366, 768)})
+		gol.UpdateRequested = false
 	} else {
-		gol.sendRectangle(x, y, width, height)
+		gol.sendUpdates()
 	}
 }
 
@@ -403,6 +475,7 @@ func (gol *GOL) ProcessKeyEvent(conn *gorfb.RFBConn, key int, downflag bool) {
 func (gol *GOL) ProcessPointerEvent(conn *gorfb.RFBConn, x, y, button int) {
 	// If the point is within the board on the image buffer
 	if button >= 1 && x >= 10 && x < 710 && y >= 10 && y < 710 {
+		fmt.Printf("@")
 		// Calculate the board position
 		i := (x - 10) / 7
 		j := (y - 10) / 7
