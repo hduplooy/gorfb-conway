@@ -1,4 +1,6 @@
-# gorfb-conway.go 
+# hduplooy/gorfb-conway
+
+## Conway's Game of Life using hduplooy/gorfb
 
 A [Conway's Game of Life](https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life) implementation that runs as a RFB server at 1366x768 pixels of which only 700x700 pixels is used to view the board. The RFB server is started on the localhost at port 5901. When a connection is made the board is initialized with random information and then it is updated every half a second with a new board based on the rules of the standard rules. This is just a basic implementation with minimal comments for now. 
 
