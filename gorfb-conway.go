@@ -1,4 +1,7 @@
 // gorfb-conway project main.go
+// Author: Hannes du Plooy
+// Revision Date: 26 Aug 2016
+// Implementation of Conway's Game of Life using hduplooy/grfb
 package main
 
 import (
